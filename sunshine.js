@@ -19,30 +19,6 @@ Connect:
 
 var http = require('http');
 
-// Default configuration.
-
-function parseOpt(defaultValue, flags, callback){
-    for(var f in flags){
-        var a = process.argv.indexOf(flags[f]);
-        if((a > -1) && (a+1 < process.argv.length)){
-            var value = process.argv[a+1];
-            if(callback) value = callback(value);
-            return value;
-        }
-    }
-    return defaultValue;
-}
-
-// The following operation processes the command-line arguments and
-// builds the conf object.  Would be nicer to have an option parser
-// library do this kind of stuff more declaratively.
-
-var conf = {
-    'host'    : parseOpt( '127.0.0.1', ['-h','--host'     ]           ),
-    'port'    : parseOpt(        7272, ['-p','--port'     ], parseInt ),
-    'logLevel': parseOpt(           0, ['-l','--log-level'], parseInt )
-};
-
 var Sunshine = function(conf){
     this.configure(conf);
     this.initSessions();
@@ -69,7 +45,6 @@ Sunshine.prototype.getBaseURL = function(){
 
 Sunshine.prototype.handleRequest = function(request, response){
     var sun = this;
-    console.log(this);
     request.setEncoding('utf8');
     request.on('data', function(data){
         sun.appendData(request, data);
@@ -101,27 +76,79 @@ Sunshine.prototype.logWarn = function(message){
     this.log(2, message);
 };
 
+Sunshine.prototype.parseFormURLEncoded = function(querystring){
+    var data = {};
+    var nvpairs = querystring.split(/&/);
+    for(var p in nvpairs){
+        var nvpair = nvpairs[p].split(/=/);
+        if(nvpair.length == 2){
+            var n = unescape(nvpair[0]);
+            var v = unescape(nvpair[1]);
+            data[n] = v;
+        }
+    }
+    return data;
+};
+
+Sunshine.prototype.parseJSON = function(json){
+    try {
+        return JSON.parse(json);
+    }
+    catch(e) {
+        return null;
+    }
+};
+
+Sunshine.prototype.parseRequestData = function(request){
+    if(typeof request.data == 'undefined')
+        return null;
+    switch(request.headers['content-type']){
+    case 'application/json':
+        return this.parseJSON(request.data);
+    case 'application/x-www-form-urlencoded':
+        return this.parseFormURLEncoded(request.data);
+    default:
+        return null;
+    }
+};
+
 Sunshine.prototype.respondTo = function(request, response){
-    this.logDebug(">>>>>>>>>>>>>");
-    this.logDebug("Request:");
-    this.logDebug(request);
-    this.logDebug("<<<<<<<<<<<<<");
+    request.data = this.parseRequestData(request);
     response.writeHead(200, {'Content-Type': 'text/plain'});
     response.end();
 };
 
-Sunshine.prototype.start = function(){
-    var sun = this;
-    this.server = http.createServer(function(request, response){
-        sun.handleRequest(request, response);
-    });
-    this.server.listen(this.conf.port, this.conf.host);
-    this.logInfo("Listening at "+this.getBaseURL());
+Sunshine.prototype.respondToGetSession = function(request, response){
+
 };
 
-var sunshine = new Sunshine(conf);
+Sunshine.prototype.start = function(){
+    var sun = this;
+    sun.server = http.createServer(function(request, response){
+        sun.handleRequest(request, response);
+    });
+    sun.server.listen(sun.conf.port, sun.conf.host);
+    sun.logInfo("Listening at "+sun.getBaseURL());
+    return sun;
+};
 
-sunshine.start();
+var sunshine = new Sunshine({
+    'host'    : parseOpt( '127.0.0.1', ['-h','--host'     ]           ),
+    'port'    : parseOpt(        7272, ['-p','--port'     ], parseInt ),
+    'logLevel': parseOpt(           0, ['-l','--log-level'], parseInt )
+}).start();
+
+function parseOpt(defaultValue, flags, callback){
+    for(var f in flags){
+        var a = process.argv.indexOf(flags[f]);
+        if((a > -1) && (a+1 < process.argv.length)){
+            var value = process.argv[a+1];
+            if(callback) value = callback(value);
+            return value;
+        }
+    }
+    return defaultValue;
+}
 
 /**
 http.createServer(function(req, res){
