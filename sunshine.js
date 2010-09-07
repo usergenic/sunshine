@@ -1,19 +1,33 @@
 /*
 
-Sunshine
+Sunshine ☀
 
 A REALLY simple JSON Messaging Conduit
 By Brendan Baldwin 2010
 
-Start:
+Start up Sunshine:
 
     $ node sunshine.js
     Sunshine Server running on http://127.0.0.1:7272/
 
-Connect:
+PUT a channel up:
 
-    $ curl http://127.0.0.1:7272/
+    $ curl -X PUT http://127.0.0.1:7272/channel_id
 
+GET messages from a channel:
+
+    $ curl http://127.0.0.1:7272/channel_id
+    {"hello":"world"}
+
+POST messages to a channel:
+
+    $ curl -d '{"hello":"world"}' http://127.0.0.1:7272/channel_id
+
+DELETE a channel:
+
+    $ curl -X DELETE http://127.0.0.1:7272/channel_id
+
+For more information visit http://brendan.github.com/sunshine.js
 
 */
 
@@ -21,6 +35,7 @@ var http = require('http');
 
 var Sunshine = function(conf){
     this.configure(conf);
+    this.initChannels();
     this.initSessions();
 };
 
@@ -31,16 +46,64 @@ Sunshine.prototype.appendData = function(request, data){
     request.data += data;
 };
 
+Sunshine.prototype.authorizeRequest = function(method, channel, request){
+    // TODO: Verify that the request contains criteria necessary to
+    // perform method on channel.
+    return true;
+};
+
+Sunshine.prototype.closeChannel = function(channelId){
+    if(!this.channels[channelId]){
+        this.logError("Unable to close undefined channel: "+channelId);
+        return false;
+    }
+
+    var channelSessions = this.channelSessions[channelId];
+    for(var sessionId in channelSessions){
+        this.closeSession(sessionId);
+    }
+};
+
+Sunshine.prototype.closeSession = function(sessionId){
+    var sessions = this.sessions;
+    var session = sessions[sessionId];
+    if(session){
+        session.response.end();
+        var channelSessions = this.channelSessions[session.channelId];
+        delete channelSessions[sessionId];
+        delete sessions[sessionId];
+    }
+};
+
 Sunshine.prototype.configure = function(conf){
-    // TODO: Extend a blank this.conf object instead of assigning
-    // property to parameter.
-    this.conf = conf;
+    this.conf = {};
+    for(var k in conf){
+        var v = conf[k];
+        this.conf[k] = v;
+    }
+};
+
+Sunshine.prototype.generateSessionId = function(){
+    var sessionId = "";
+
+    for(var i = 0; i < 32; i++){
+        sessionId += (Math.random() * 10);
+    }
+
+    if(this.sessions[sessionId])
+        return this.generateSessionId();
+
+    return sessionId;
 };
 
 Sunshine.prototype.getBaseURL = function(){
     var baseURL = "http://" + this.conf.host;
     if(this.conf.port !== 80) baseURL += ":" + this.conf.port;
     return baseURL + "/";
+};
+
+Sunshine.prototype.getChannel = function(channelId){
+    return this.channels[channelId];
 };
 
 Sunshine.prototype.handleRequest = function(request, response){
@@ -54,6 +117,13 @@ Sunshine.prototype.handleRequest = function(request, response){
     });
 };
 
+Sunshine.prototype.initChannels = function(){
+    // TODO: If sessions are open and connected to channels, close their
+    // connections before clearing the registry.
+    this.channels = {};
+    this.channelSessions = {};
+};
+
 Sunshine.prototype.initSessions = function(){
     // TODO: If sessions are present, close their connections before
     // clearing the registry.
@@ -63,17 +133,43 @@ Sunshine.prototype.initSessions = function(){
 Sunshine.prototype.log = function(severity, message){
     if(this.conf.logLevel <= severity) console.log(message);
 };
+
 Sunshine.prototype.logDebug = function(message){
     this.log(0, message);
 };
+
 Sunshine.prototype.logError = function(message){
     this.log(3, message);
 };
+
 Sunshine.prototype.logInfo = function(message){
     this.log(1, message);
 };
+
 Sunshine.prototype.logWarn = function(message){
     this.log(2, message);
+};
+
+Sunshine.prototype.openChannel = function(channelId, definition){
+    if(this.channels[channelId]){
+        this.logError("Channel already open: "+channelId);
+        return false;
+    }
+    if(!definition)
+        definition = {};
+    this.channels[channelId] = definition;
+    this.channelSessions[channelId] = {};
+    return true;
+};
+
+Sunshine.prototype.openSession = function(channelId, response){
+    var sessionId = this.generateSessionId();
+    this.sessions[sessionId] = {
+        'channel_id': channelId,
+        'response': response
+    };
+    this.channelSessions[channelId][sessionId] = true;
+    return sessionId;
 };
 
 Sunshine.prototype.parseFormURLEncoded = function(querystring){
@@ -113,13 +209,137 @@ Sunshine.prototype.parseRequestData = function(request){
 };
 
 Sunshine.prototype.respondTo = function(request, response){
+    this.logInfo(request.method+' '+request.url);
+    request.channel_id = request.url;
     request.data = this.parseRequestData(request);
-    response.writeHead(200, {'Content-Type': 'text/plain'});
-    response.end();
+    switch(request.method){
+    case "DELETE":
+        return this.respondToDELETE(request, response);
+    case "HEAD":
+        return this.respondToHEAD(request, response);
+    case "GET":
+        return this.respondToGET(request, response);
+    case "POST":
+        return this.respondToPOST(request, response);
+    case "PUT":
+        return this.respondToPUT(request, response);
+    default:
+        return this.respondWith405(response);
+    }
 };
 
-Sunshine.prototype.respondToGetSession = function(request, response){
+Sunshine.prototype.respondToDELETE = function(request, response){
+    var channel = this.getChannel(request.channelId);
 
+    if(!channel)
+        return this.respondWith404(response);
+
+    if(!this.authorizeRequest('DELETE', channel, request))
+        return this.respondWith403(response);
+
+    this.deleteChannel(channel);
+    this.respondWith410(response);
+};
+
+Sunshine.prototype.respondToGET = function(request, response){
+    var sun = this;
+    var channel = sun.getChannel(request.channelId);
+
+    if(!channel)
+        return sun.respondWith404(response);
+
+    if(!sun.authorizeRequest('GET', channel, request))
+        return sun.respondWith403(response);
+
+    var sessionId = sun.openSession(request.channelId, response);
+
+    response.writeHead(200, {'Content-Type': 'application/json-stream'});
+    request.socket.on('close', function(){
+        sun.closeSession(sessionId);
+    });
+};
+
+Sunshine.prototype.respondToHEAD = function(request, response){
+    var sun = this;
+    var channel = sun.getChannel(request.channelId);
+
+    if(!channel)
+        return sun.respondWith404(response);
+
+    if(!sun.authorizeRequest('GET', channel, request))
+        return sun.respondWith403(response);
+
+    return sun.respondWith200(response);
+};
+
+Sunshine.prototype.respondToPOST = function(request, response){
+    var sun = this;
+    var channel = sun.getChannel(request.channelId);
+
+    if(!channel)
+        return sun.respondWith404(response);
+
+    if(!sun.authorizeRequest('POST', channel, request))
+        return sun.respondWith403(response);
+
+    sun.respondWith201(response);
+    sun.writeToChannel(request.channelId, JSON.stringify(request.data)+"\n");
+
+    return 201;
+};
+
+Sunshine.prototype.respondToPUT = function(request, response){
+    var sun = this;
+    var channel = sun.getChannel(request.channelId);
+
+    if(channel)
+        return sun.respondWith409(response);
+
+    if(!sun.authorizeRequest('PUT', channel, request))
+        return sun.respondWith403(response);
+
+    if(sun.openChannel(request.channelId, request.data))
+        return sun.respondWith201(response);
+
+    return sun.respondWith500(response);
+};
+
+Sunshine.prototype.respondWith200 = function(response){
+    return this.respondWith(response, 200);
+};
+
+Sunshine.prototype.respondWith201 = function(response){
+    return this.respondWith(response, 201);
+};
+
+Sunshine.prototype.respondWith403 = function(response){
+    return this.respondWith(response, 403);
+};
+
+Sunshine.prototype.respondWith404 = function(response){
+    return this.respondWith(response, 404);
+};
+
+Sunshine.prototype.respondWith405 = function(response){
+    return this.respondWith(response, 405);
+};
+
+Sunshine.prototype.respondWith409 = function(response){
+    return this.respondWith(response, 409);
+};
+
+Sunshine.prototype.respondWith410 = function(response){
+    return this.respondWith(response, 410);
+};
+
+Sunshine.prototype.respondWith500 = function(response){
+    return this.respondWith(response, 500);
+};
+
+Sunshine.prototype.respondWith = function(response, status){
+    response.writeHead(status, {'Content-Type': 'text/plain'});
+    response.end();
+    return status;
 };
 
 Sunshine.prototype.start = function(){
@@ -132,11 +352,34 @@ Sunshine.prototype.start = function(){
     return sun;
 };
 
+Sunshine.prototype.writeToChannel = function(channelId, data){
+    var channelSessions = this.channelSessions[channelId];
+    if(channelSessions){
+        for(var sessionId in channelSessions){
+            this.writeToSession(sessionId, data);
+        }
+    }
+};
+
+Sunshine.prototype.writeToSession = function(sessionId, data){
+    var session = this.sessions[sessionId];
+    if(session)
+        session.response.write(data);
+};
+
 var sunshine = new Sunshine({
     'host'    : parseOpt( '127.0.0.1', ['-h','--host'     ]           ),
     'port'    : parseOpt(        7272, ['-p','--port'     ], parseInt ),
     'logLevel': parseOpt(           0, ['-l','--log-level'], parseInt )
 }).start();
+
+function h(string){
+    return string.
+        replace(/&/g,'&amp;').
+        replace(/</g,'&lt;').
+        replace(/>/g,'&gt;').
+        replace(/'/g,'&#39;');
+}
 
 function parseOpt(defaultValue, flags, callback){
     for(var f in flags){
@@ -149,52 +392,3 @@ function parseOpt(defaultValue, flags, callback){
     }
     return defaultValue;
 }
-
-/**
-http.createServer(function(req, res){
-
-    var count = 0;
-    var writeable = true;
-    var session_id = req.url;
-
-    req.setEncoding('utf8');
-
-    if(req.method == 'GET'){
-        req.on('end', function(){
-            sessions[session_id] = res;
-            res.writeHead(200, {'Content-Type': 'text/plain'});
-            console.log('session '+session_id+' opened.');
-        });
-        req.socket.on('close', function(){
-            delete sessions[session_id];
-            console.log('session '+session_id+' closed.');
-        });
-    }
-    else if(sessions[session_id]){
-        req.on('data', function(data){
-            sessions[session_id].write(data);
-        });
-        req.on('end', function(){
-            sessions[session_id].write("\n");
-            res.writeHead(200, {'Content-Type': 'text/plain'});
-            res.end("message sent\n");
-        });
-    }
-    else {
-        req.on('end', function(){
-            res.writeHead(404, {'Content-Type': 'text/plain'});
-            res.end("no session\n");
-        });
-    }
-
-}).listen(conf.port, conf.host);
-
-setInterval(function(){
-    var sids = [];
-    for(var s in sessions){ sids.push(s); }
-    console.log(sids);
-}, 1000);
-
-console.log('Server running at '+conf.url());
-
-**/
