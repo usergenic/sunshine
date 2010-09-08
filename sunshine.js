@@ -83,6 +83,11 @@ Sunshine.prototype.configure = function(conf){
     }
 };
 
+Sunshine.prototype.deleteChannel = function(channel_id){
+    // TODO: Implement me.
+    return false;
+};
+
 Sunshine.prototype.generateSessionId = function(){
     var sessionId = "";
 
@@ -103,7 +108,8 @@ Sunshine.prototype.getBaseURL = function(){
 };
 
 Sunshine.prototype.getChannel = function(channelId){
-    return this.channels[channelId];
+    if(channelId)
+        return this.channels[channelId];
 };
 
 Sunshine.prototype.handleRequest = function(request, response){
@@ -210,7 +216,7 @@ Sunshine.prototype.parseRequestData = function(request){
 
 Sunshine.prototype.respondTo = function(request, response){
     this.logInfo(request.method+' '+request.url);
-    request.channel_id = request.url;
+    request.channelId = request.url;
     request.data = this.parseRequestData(request);
     switch(request.method){
     case "DELETE":
@@ -224,7 +230,7 @@ Sunshine.prototype.respondTo = function(request, response){
     case "PUT":
         return this.respondToPUT(request, response);
     default:
-        return this.respondWith405(response);
+        return this.respondWith(response, 405);
     }
 };
 
@@ -232,13 +238,13 @@ Sunshine.prototype.respondToDELETE = function(request, response){
     var channel = this.getChannel(request.channelId);
 
     if(!channel)
-        return this.respondWith404(response);
+        return this.respondWith(response, 404);
 
     if(!this.authorizeRequest('DELETE', channel, request))
-        return this.respondWith403(response);
+        return this.respondWith(response, 403);
 
     this.deleteChannel(channel);
-    this.respondWith410(response);
+    this.respondWith(response, 410);
 };
 
 Sunshine.prototype.respondToGET = function(request, response){
@@ -246,10 +252,10 @@ Sunshine.prototype.respondToGET = function(request, response){
     var channel = sun.getChannel(request.channelId);
 
     if(!channel)
-        return sun.respondWith404(response);
+        return sun.respondWith(response, 404);
 
     if(!sun.authorizeRequest('GET', channel, request))
-        return sun.respondWith403(response);
+        return sun.respondWith(response, 403);
 
     var sessionId = sun.openSession(request.channelId, response);
 
@@ -264,12 +270,12 @@ Sunshine.prototype.respondToHEAD = function(request, response){
     var channel = sun.getChannel(request.channelId);
 
     if(!channel)
-        return sun.respondWith404(response);
+        return sun.respondWith(response, 404);
 
     if(!sun.authorizeRequest('GET', channel, request))
-        return sun.respondWith403(response);
+        return sun.respondWith(response, 403);
 
-    return sun.respondWith200(response);
+    return sun.respondWith(response, 200);
 };
 
 Sunshine.prototype.respondToPOST = function(request, response){
@@ -277,12 +283,12 @@ Sunshine.prototype.respondToPOST = function(request, response){
     var channel = sun.getChannel(request.channelId);
 
     if(!channel)
-        return sun.respondWith404(response);
+        return sun.respondWith(response, 404);
 
     if(!sun.authorizeRequest('POST', channel, request))
-        return sun.respondWith403(response);
+        return sun.respondWith(response, 403);
 
-    sun.respondWith201(response);
+    sun.respondWith(response, 201);
     sun.writeToChannel(request.channelId, JSON.stringify(request.data)+"\n");
 
     return 201;
@@ -293,51 +299,19 @@ Sunshine.prototype.respondToPUT = function(request, response){
     var channel = sun.getChannel(request.channelId);
 
     if(channel)
-        return sun.respondWith409(response);
+        return sun.respondWith(response, 409);
 
     if(!sun.authorizeRequest('PUT', channel, request))
-        return sun.respondWith403(response);
+        return sun.respondWith(response, 403);
 
     if(sun.openChannel(request.channelId, request.data))
-        return sun.respondWith201(response);
+        return sun.respondWith(response, 201);
 
-    return sun.respondWith500(response);
-};
-
-Sunshine.prototype.respondWith200 = function(response){
-    return this.respondWith(response, 200);
-};
-
-Sunshine.prototype.respondWith201 = function(response){
-    return this.respondWith(response, 201);
-};
-
-Sunshine.prototype.respondWith403 = function(response){
-    return this.respondWith(response, 403);
-};
-
-Sunshine.prototype.respondWith404 = function(response){
-    return this.respondWith(response, 404);
-};
-
-Sunshine.prototype.respondWith405 = function(response){
-    return this.respondWith(response, 405);
-};
-
-Sunshine.prototype.respondWith409 = function(response){
-    return this.respondWith(response, 409);
-};
-
-Sunshine.prototype.respondWith410 = function(response){
-    return this.respondWith(response, 410);
-};
-
-Sunshine.prototype.respondWith500 = function(response){
-    return this.respondWith(response, 500);
+    return sun.respondWith(response, 500);
 };
 
 Sunshine.prototype.respondWith = function(response, status){
-    response.writeHead(status, {'Content-Type': 'text/plain'});
+    response.writeHead(status, {'Content-Type': 'text/plain', 'Content-Length': '0'});
     response.end();
     return status;
 };
